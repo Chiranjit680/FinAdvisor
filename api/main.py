@@ -5,10 +5,13 @@ from sqlmodel import Session, select
 from .database import create_db_and_tables, get_session
 from .models import Profile,Chat, Portfolio
 from google import genai
+import uuid
 app = FastAPI()
 from dotenv import load_dotenv
 import os
+from .middlewares import RateLimitMiddleware
 load_dotenv()
+app.add_middleware(RateLimitMiddleware, )
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
@@ -32,7 +35,23 @@ async def create_profile(profile: Profile, db: Session = Depends(get_session)):
     db.refresh(profile)
     return {"message": "Profile created successfully!", "profile": profile}
 
+@app.get('/profile/{user_id}')
+async def get_profile(user_id: int, db: Session = Depends(get_session)):
+    user = db.exec(select(Profile).where(Profile.id == user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user": user}
 
+@app.post('/add_portfolio/{user_id}')
+async def add_portfolio(user_id: uuid.UUID, portfolio: Portfolio, db: Session = Depends(get_session)):
+    existing_portfolio = db.exec(select(Portfolio).where(Portfolio.user_id == user_id)).first()
+    if existing_portfolio:
+        raise HTTPException(status_code=400, detail="Portfolio already exists for this user")
+    portfolio.user_id = user_id  # Set the user_id for the portfolio
+    db.add(portfolio)
+    db.commit()
+    db.refresh(portfolio)
+    return {"message": "Portfolio added successfully!", "portfolio": portfolio}
 
 
 
@@ -47,18 +66,18 @@ client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 # print(response.text)
 
 @app.post('/chat_gemini/{user_id}')
-async def chat_with_gemini(user_id: int, prompt: str, db: Session = Depends(get_session)):
+async def chat_with_gemini(user_id: uuid.UUID, prompt: str, db: Session = Depends(get_session)):
     try:
         if not prompt:
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
         if len(prompt) > 1000:
             raise HTTPException(status_code=400, detail="Prompt is too long. Please limit to 1000 characters.")
-        hstr= db.exec(select(Chat)).where(Chat.user_id==user_id).all()
+        hstr= db.exec(select(Chat).where(Chat.user_id==user_id)).all()
         history = ""
         for chat in hstr:
             history += "User:"+chat.human_message + " AI: " + chat.ai_message
-        user_info = db.exec(select(Profile)).where(Profile.id==user_id).first()
-        portfolio = db.exec(select(Portfolio)).where(Portfolio.user_id==user_id).first()
+        user_info = db.exec(select(Profile).where(Profile.id==user_id)).first()
+        portfolio = db.exec(select(Portfolio).where(Portfolio.user_id==user_id)).first()
         username = user_info.username if user_info else "Unknown User"
         age= user_info.age if user_info else "Unknown Age"
         equity_amt = portfolio.equity_amt if portfolio else "Unknown Equity Amount"

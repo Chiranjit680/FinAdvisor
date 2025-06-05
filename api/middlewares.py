@@ -6,7 +6,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import HTTPException
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, limit: int = 10, period: int = 60):
+    def __init__(self, app, limit: int = 1, period: int = 2):
         super().__init__(app)
         self.limit = limit        # Max requests
         self.period = period      # Time window (in seconds)

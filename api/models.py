@@ -30,13 +30,14 @@ class Profile(SQLModel, table=True):
             # Removed nullable=True and index=True - can't use with sa_column
         )
     )
+    
 class Chat(SQLModel, table=True):
         __tablename__ = "Chat"
 
         id: int | None = Field(default=None, primary_key=True)
         user_id: uuid.UUID = Field(foreign_key="User.id", index=True)
-        human_message: str = Field(index=True)
-        ai_message: str = Field(index=True)
+        human_message: str = Field()
+        ai_message: str = Field()
         timestamp: datetime = Field(
             sa_column=Column(
                 TIMESTAMP(timezone=True),
