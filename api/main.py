@@ -6,15 +6,55 @@ from .database import create_db_and_tables, get_session
 from .models import Profile,Chat, Portfolio
 from google import genai
 import uuid
-app = FastAPI()
+
+
 from dotenv import load_dotenv
 import os
+import yfinance as yf
+from nselib import capital_market
 from .middlewares import RateLimitMiddleware
+from sqlalchemy.exc import SQLAlchemyError
+import logging
+from api.database import engine
+
 load_dotenv()
-app.add_middleware(RateLimitMiddleware, )
+
+app = FastAPI()
+import api.screener as screener
+app.add_middleware(RateLimitMiddleware)
+logger=logging.getLogger(__name__)
+
 @app.on_event("startup")
 def on_startup():
-    create_db_and_tables()
+    """
+    Startup event handler with improved error handling and logging.
+    """
+    try:
+        logger.info("Application startup initiated")
+        
+        # Create database tables
+        create_db_and_tables()
+        logger.info("Database tables created successfully")
+        
+        # Get database session
+        try:
+            with Session(engine) as session:
+
+                # Upload stock data in background to avoid blocking startup
+                logger.info("Starting stock data upload...")
+                result = screener.upload_stock_data(session)
+                if result["success"]:
+                    logger.info(f"Stock data upload completed: {result['message']}")
+                else:
+                    logger.error(f"Stock data upload failed: {result['message']}")
+        except SQLAlchemyError as e:
+            logger.error(f"Database error during startup: {str(e)}")
+        
+    except Exception as e:
+        logger.error(f"Startup error: {str(e)}")
+        # Don't raise the exception to prevent app from failing to start
+        # You might want to set a flag to indicate incomplete initialization
+
 
 @app.get("/")
 async def root():
@@ -114,16 +154,50 @@ User Question: {prompt}"""
             contents=context,
         )
         
-        # Optional: Save this conversation to database
-        new_chat = Chat(
-            user_id=user_id,
-            human_message=prompt,
-            ai_message=response.text
-        )
-        db.add(new_chat)
-        db.commit()
+       
         
         return {"response": response.text}
     except Exception as e:
 
         raise HTTPException(status_code=500, detail=str(e)+ " An error occurred while communicating with the Gemini API.")
+ 
+@app.get('/stock_query/{user_id}/{symbol}') 
+async def stock_query(user_id: uuid.UUID, symbol: str, query:str,db: Session = Depends(get_session)):
+    try:
+        if not symbol:
+            raise HTTPException(status_code=400, detail="Symbol cannot be empty")
+        if len(symbol) >10:
+            raise HTTPException(status_code=400, detail="Symbol is too long. Please limit to 10 characters.")
+        stock=yf.Ticker(symbol)
+        stock_info = stock.info 
+        # Call Gemini API
+        context="This is the data of the stock is user querying for: " + str(stock_info) +"use this to answer the user's query. Query:"+query
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=context
+        )
+        print(stock_info)
+        
+        return {"response": response.text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e) + " An error occurred while processing the stock query.")
+@app.post('/load_stock_data/')
+def load_stock_data(db: Session = Depends(get_session)):
+    """
+    Load stock data from NSE and update the database.
+    """
+    try:
+        screener.upload_stock_data(db)
+        return {"message": "Stock data loaded successfully!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e) + " An error occurred while loading stock data.")
+@app.put('/update_stock_data/')
+def update_stock_data(db: Session = Depends(get_session)):
+    """
+    Update stock data in the database.
+    """
+    try:
+        screener.upload_stock_data(db)
+        return {"message": "Stock data updated successfully!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e) + " An error occurred while updating stock data.")
