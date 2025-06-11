@@ -1,0 +1,96 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environment
+.env/
+.venv/
+venv/
+ENV/
+env.bak/
+env/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment variables / secrets
+*.env
+.env.*
+
+# VSCode settings
+.vscode/
+
+# macOS and Windows system files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# MyPy, Pytest, Coverage
+.mypy_cache/
+.pytest_cache/
+coverage/
+htmlcov/
+.tox/
+
+# Node.js (if frontend exists)
+node_modules/
+dist/
+build/
+
+# Compiled source
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+
+# Docker
+*.pid
+*.pid.lock
+
+# Git
+*.orig
+
+# Database files
+*.sqlite3
+*.db
+
+# PyInstaller
+*.spec
+
+# Uploads
+uploads/
+
+# Large files/data (optional)
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+*.csv
+*.xlsx
+*.pkl
+*.h5
+
+# For JetBrains IDEs
+.idea/
+
+
+*.pt
+*.pth
+*.h5
+*.pkl
+*.joblib
+*.safetensors
+bertmodel/
+models/
+checkpoints/
