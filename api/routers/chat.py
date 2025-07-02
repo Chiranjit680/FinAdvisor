@@ -1,22 +1,26 @@
-from ..models import Chat
-from ..models import Profile, Portfolio
+from ..models import Chat, Profile, Portfolio
 from ..database import get_session
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from starlette.requests import Request
 import uuid
 import yfinance as yf
-from ..utils import chat_with_gemini, get_ticker_by_company, generate_sql_query,get_company_list, extract_company_ticker
+from ..utils import chat_with_gemini, get_ticker_by_company, generate_sql_query, get_company_list, extract_company_ticker
 from dotenv import load_dotenv
-from datetime import date,timedelta
+from datetime import date, timedelta
 import os
 import finnhub
 from ..bertmodel_loader import tokenizer, model
+from ..OAuth2 import get_current_user, authenticate_user, verify_password
+from fastapi.security import OAuth2PasswordBearer
+
+# Create OAuth2 scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="user/token")
 
 load_dotenv()
 finhub_api_key=os.getenv("FINHUB")
 router = APIRouter(
-    "/chat",
+    prefix="/chat",
     tags=["Chat"]
 )
 
@@ -26,8 +30,6 @@ def fetch_news(ticker:str)->str:
     date_past=str(date.today()-timedelta(days=90))
     news = finnhub_client.company_news(ticker, _from=date_past, to=date_today)
     return news
-def sentiment_analysis():
-    
 
 def financial_advice(user_id: uuid.UUID, prompt: str, db: Session = Depends(get_session)):
     try:
@@ -78,13 +80,46 @@ User Question: {prompt}"""
 
         return {"response": response}
     except Exception as e:
-
         raise HTTPException(status_code=500, detail=str(e)+ " An error occurred while communicating with the Gemini API.")
 
+# Add an authenticated route that uses the OAuth2 system
+@router.post("/secure-advice")
+async def get_secure_financial_advice(
+    request: Request,  # Use Request to access JSON body
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_session)
+):
+    """
+    Get financial advice as an authenticated user
+    """
+    # Get current user from token
+    current_user = get_current_user(token, db)
+    
+    # Extract prompt from request body
+    body = await request.json()
+    prompt = body.get("prompt")
+    
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is required")
+    
+    # Get advice using the financial_advice function
+    response = financial_advice(current_user.id, prompt, db)
+    
+    # Save the chat to database
+    new_chat = Chat(
+        user_id=current_user.id,
+        human_message=prompt,
+        ai_message=response["response"]
+    )
+    
+    db.add(new_chat)
+    db.commit()
+    db.refresh(new_chat)
+    
+    return response
 
-        
-
-def company_query(user_id: uuid.UUID,  request: Request, db: Session = Depends(get_session)):
+# Update company_query to use authentication if needed
+def company_query(user_id: uuid.UUID, request: Request, db: Session = Depends(get_session)):
    try:
        prompt = request.query_params.get("prompt")
        if not prompt:
@@ -100,11 +135,21 @@ def company_query(user_id: uuid.UUID,  request: Request, db: Session = Depends(g
        response=chat_with_gemini(context)
        return response
    except Exception as e:
-       raise HTTPException("Sorry not enough information ")
-       
-       
-       
-       
-       
-       
-         
+       raise HTTPException(status_code=500, detail="Sorry not enough information")
+
+@router.post("/company-query")
+async def get_secure_company_info(
+    request: Request,
+    current_user: Profile = Depends(lambda token: get_current_user(token, Depends(get_session))),
+    db: Session = Depends(get_session)
+):
+    """
+    Get company information as an authenticated user
+    """
+    return company_query(current_user.id, request, db)
+
+
+
+
+
+

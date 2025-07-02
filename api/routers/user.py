@@ -1,9 +1,13 @@
-
 from ..models import Profile, ProfileCreate, ProfileOut
 from ..database import get_session
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Security
 from sqlmodel import Session, select
 from ..utils import hash_password
+from ..OAuth2 import authenticate_user, get_current_user
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+
+# Create OAuth2 scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="user/token")
 
 router = APIRouter(
     prefix='/user',
@@ -17,8 +21,6 @@ async def get_profiles(db: Session = Depends(get_session)):
     if not users:
         raise HTTPException(status_code=404, detail="No users found")
     return {"users": users}
-
-
     
 @router.get('/profile/{user_id}', response_model=ProfileOut)
 async def get_profile(user_id: int, db: Session = Depends(get_session)):
@@ -53,3 +55,47 @@ async def create_profile(profile_in: ProfileCreate, db: Session = Depends(get_se
         return new_profile
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e) + " an error occurred while creating the user profile.")
+
+# Add login endpoint to generate token
+@router.post('/token')
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_session)):
+    """
+    Authenticate user and return access token
+    """
+    user = authenticate_user(form_data.username, form_data.password, db)
+    
+    # You'll need to implement this function in OAuth2.py
+    from datetime import timedelta
+    from ..OAuth2 import JWT_SECRET_KEY, ACCESS_TOKEN_EXPIRE_MINUTES
+    from jose import jwt
+    from datetime import datetime
+    
+    # Generate token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expires = datetime.utcnow() + access_token_expires
+    
+    to_encode = {
+        "sub": str(user.id),
+        "exp": expires
+    }
+    
+    access_token = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm="HS256")
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
+
+
+
+
+
+
+
+
+    
+
+@router.get('/me', response_model=ProfileOut)
+async def read_users_me(current_user: Profile = Depends(get_current_user)):
+    return current_user

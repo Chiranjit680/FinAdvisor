@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from ..models import StockData
 from ..database import get_session
-import screener
+from api import screener
 from sqlmodel import Session, select
 router = APIRouter(
     prefix='/stock',

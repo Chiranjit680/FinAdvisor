@@ -8,7 +8,7 @@ from google import genai
 import uuid
 from api.utils import hash_password
 
-
+from api.routers import user, chat, portfolio, stock
 from dotenv import load_dotenv
 import os
 import yfinance as yf
@@ -28,10 +28,10 @@ app.add_middleware(AuthMiddleware)
 app.add_middleware(LoggerMiddleware)
 logger=logging.getLogger(__name__)
 
-app.include_router(routers.user.router)
-app.include_router(routers.chat.router)
-app.include_router(routers.portfolio.router)
-app.include_router(routers.stock.router)
+app.include_router(user.router)
+app.include_router(chat.router)
+app.include_router(portfolio.router)
+app.include_router(stock.router)
 
 @app.on_event("startup")
 def on_startup():

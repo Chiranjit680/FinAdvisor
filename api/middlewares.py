@@ -6,9 +6,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import HTTPException
 import os
 from jose import jwt, JWTError
+from dotenv import load_dotenv
 
+load_dotenv()
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_secret_key")
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, limit: int = 1, period: int = 2):
         super().__init__(app)
@@ -36,31 +38,43 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        token=request.headers.get("Authorization").split(" ")[1] if "Authorization" in request.headers else None
-        if not token or not token.startswith("Bearer "):
+        # Define public paths that don't need authentication
+        public_paths = [
+            "/user/create_profile",
+            "/user/token",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/"
+        ]
+        
+        # Skip authentication for public paths
+        path = request.url.path
+        if any(path.startswith(public_path) for public_path in public_paths):
+            return await call_next(request)
+        
+        # Check for Authorization header
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
             return Response(
+                status_code=401,
                 content="Authorization header missing or invalid.",
-                status_code=401
+                media_type="text/plain"
             )
-        else:
-            payload=jwt.decode(
-                token, 
-                JWT_SECRET_KEY,
-                algorithms=["HS256"]
+        
+        # Extract and validate token
+        token = auth_header.split(" ")[1]
+        try:
+            jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
+        except jwt.PyJWTError:
+            return Response(
+                status_code=401,
+                content="Invalid or expired token.",
+                media_type="text/plain"
             )
-            if not payload:
-                return Response(
-                    content="Invalid token.",
-                    status_code=401
-                )
-            if "sub" not in payload:
-                return Response(
-                    content="Token does not contain user information.",
-                    status_code=401
-                )
-            request.state.user_id = payload["sub"]
-        response = await call_next(request)
-        return response
+            
+        return await call_next(request)
+
 class LoggerMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Log request details
@@ -73,5 +87,4 @@ class LoggerMiddleware(BaseHTTPMiddleware):
         # Log response details
         print(f"Response status: {response.status_code}")
         return response
-    
-    
+

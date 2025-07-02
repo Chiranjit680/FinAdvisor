@@ -3,21 +3,21 @@ from sqlmodel import SQLModel, Field
 from sqlalchemy import Column, TIMESTAMP, String
 from sqlalchemy.sql import func
 from datetime import datetime
-from typing import Optional
-from pydantic import validator
-import emailvalidator
-import uuid
-from pydantic import BaseModel
+from typing import Optional, Union
+from pydantic import validator, BaseModel
 from pydantic.networks import EmailStr
+import uuid
+
+
 class Profile(SQLModel, table=True):
     __tablename__ = "user"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    username: str = Field( sa_column=Column(String, unique=True, nullable=False))
-    email: EmailStr = Field( sa_column=Column(String, unique=True, nullable=False))
+    username: str = Field(sa_column=Column(String, unique=True, nullable=False))
+    email: EmailStr = Field(sa_column=Column(String, unique=True, nullable=False))
     password_hash: str = Field(nullable=False)
     name: str = Field(nullable=False)
-    age: Optional[int] = Field(nullable=True)
+    age: Optional[int] = Field(default=None, nullable=True)
 
     created_at: datetime = Field(
         sa_column=Column(
@@ -33,18 +33,30 @@ class Profile(SQLModel, table=True):
             onupdate=func.now()
         )
     )
+class Token(BaseModel):
+    
+    access_token: str
+    token_type: str = "bearer"
+class TokenData(BaseModel):
+    id: Union[int, uuid.UUID]  # Use Union to allow both int and UUID types
+    username: str
+    email: EmailStr
 
-# validator for pydantic side → works only in basemodel (see below)
+    class Config:
+        orm_mode = True  # Enable ORM mode for compatibility with SQLModel
+        arbitrary_types_allowed = True  # Allow arbitrary types like UUID
+        json_encoders = {
+            uuid.UUID: str  # Ensure UUIDs are serialized as strings
+        }
 
-# profile create request model
 
-
+# Profile create request model
 class ProfileCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
     name: str
-    age: int | None
+    age: Optional[int] = None
 
     @validator("email")
     def validate_email(cls, v: str) -> str:
@@ -59,26 +71,28 @@ class ProfileCreate(BaseModel):
         return v.strip()
 
     @validator("age")
-    def validate_age(cls, v: int) -> int:
+    def validate_age(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and (v < 18 or v > 120):
             raise ValueError("age must be between 18 and 120")
         return v
 
-# profile out model
+
+# Profile output model
 class ProfileOut(BaseModel):
     id: uuid.UUID
     username: str
     email: EmailStr
     name: str
-    age: int | None
+    age: Optional[int]
     created_at: datetime
     updated_at: Optional[datetime]
 
-class Chat(SQLModel, table=True):
-    __tablename__ = "Chat"
 
-    id: int | None = Field(default=None, primary_key=True)
-    user_id: uuid.UUID = Field(foreign_key="User.id", index=True)
+class Chat(SQLModel, table=True):
+    __tablename__ = "chat"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="user.id", index=True)
     human_message: str = Field()
     ai_message: str = Field()
     timestamp: datetime = Field(
@@ -87,10 +101,12 @@ class Chat(SQLModel, table=True):
             server_default=func.now()
         )
     )
+
+
 class UserLogin(SQLModel, table=True):
-    __tablename__ = "UserLogin"
+    __tablename__ = "user_login"
 
-
+    id: Optional[int] = Field(default=None, primary_key=True)
     user_name: str = Field(index=True)
     password: str = Field(index=True)
     login_time: datetime = Field(
@@ -99,37 +115,52 @@ class UserLogin(SQLModel, table=True):
             server_default=func.now()
         )
     )
+
+
 class Portfolio(SQLModel, table=True):
-    __tablename__ = "Portfolio"
+    __tablename__ = "portfolio"
 
     portfolio_id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    user_id: uuid.UUID = Field(foreign_key="User.id", index=True)
-    equity_amt: float | None = Field(default=None, index=True)
-    cash_amt: float | None = Field(default=None, index=True)
-    fd_amt: float | None = Field(default=None, index=True)
-    debt_amt: float | None = Field(default=None, index=True)
-
-    real_estate_amt: float | None = Field(default=None, index=True)
+    user_id: uuid.UUID = Field(foreign_key="user.id", index=True)
+    equity_amt: Optional[float] = Field(default=None, index=True)
+    cash_amt: Optional[float] = Field(default=None, index=True)
+    fd_amt: Optional[float] = Field(default=None, index=True)
+    debt_amt: Optional[float] = Field(default=None, index=True)
+    real_estate_amt: Optional[float] = Field(default=None, index=True)
+    bonds_amt: Optional[float] = Field(default=None, index=True)
+    crypto_amt: Optional[float] = Field(default=None, index=True)
     
-    bonds_amt: float | None = Field(default=None, index=True)
+    created_at: datetime = Field(
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            server_default=func.now()
+        )
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now()
+        )
+    )
 
-    crypto_amt: float | None = Field(default=None, index=True)
-     
+
 class StockData(SQLModel, table=True):
-    __tablename__ = "StockData"
+    __tablename__ = "stock_data"
 
     stock_id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     stock_name: str = Field(index=True)
-    stock_ticker: str = Field(index=True, sa_column=Column(String, unique=True, nullable=False))
-    sector: str | None = Field(default=None, index=True)
+    stock_ticker: str = Field(sa_column=Column(String, unique=True, nullable=False))
+    sector: Optional[str] = Field(default=None, index=True)
     current_price: float = Field(index=True)
-    pe_ratio: float | None = Field(default=None, index=True)
-    pb_ratio: float | None = Field(default=None, index=True)
-    dividend_yield: float | None = Field(default=None, index=True)
-    eps: float | None = Field(default=None, index=True)
-    book_value: float | None = Field(default=None, index=True)
-    market_cap: float | None = Field(default=None, index=True)
-    volume: int | None = Field(default=None, index=True)
+    pe_ratio: Optional[float] = Field(default=None, index=True)
+    pb_ratio: Optional[float] = Field(default=None, index=True)
+    dividend_yield: Optional[float] = Field(default=None, index=True)
+    eps: Optional[float] = Field(default=None, index=True)
+    book_value: Optional[float] = Field(default=None, index=True)
+    market_cap: Optional[float] = Field(default=None, index=True)
+    volume: Optional[int] = Field(default=None, index=True)
     last_updated: datetime = Field(
         sa_column=Column(
             TIMESTAMP(timezone=True),
@@ -137,3 +168,42 @@ class StockData(SQLModel, table=True):
             onupdate=func.now()
         )
     )
+
+
+# Additional response models for consistency
+class ChatOut(BaseModel):
+    id: int
+    user_id: uuid.UUID
+    human_message: str
+    ai_message: str
+    timestamp: datetime
+
+
+class PortfolioOut(BaseModel):
+    portfolio_id: uuid.UUID
+    user_id: uuid.UUID
+    equity_amt: Optional[float]
+    cash_amt: Optional[float]
+    fd_amt: Optional[float]
+    debt_amt: Optional[float]
+    real_estate_amt: Optional[float]
+    bonds_amt: Optional[float]
+    crypto_amt: Optional[float]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
+class StockDataOut(BaseModel):
+    stock_id: uuid.UUID
+    stock_name: str
+    stock_ticker: str
+    sector: Optional[str]
+    current_price: float
+    pe_ratio: Optional[float]
+    pb_ratio: Optional[float]
+    dividend_yield: Optional[float]
+    eps: Optional[float]
+    book_value: Optional[float]
+    market_cap: Optional[float]
+    volume: Optional[int]
+    last_updated: datetime
