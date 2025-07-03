@@ -45,7 +45,10 @@ logger = logging.getLogger(__name__)
 app.include_router(user.router)
 app.include_router(chat.router)
 app.include_router(portfolio.router)
-app.include_router(stock.router)
+app.include_router(stock.router)  # Changed from api.stockdata
+
+
+
 
 @app.on_event("startup")
 def on_startup():

@@ -59,16 +59,21 @@ async def get_portfolio(user_id: uuid.UUID, db: Session = Depends(get_session)):
 # New secured route using OAuth2
 @router.get('/secure/my_portfolio')
 async def get_secure_portfolio(
-    current_user: Profile = Depends(lambda token: get_current_user(token, Depends(get_session))),
+    token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_session)
 ):
     """
     Get portfolio for the authenticated user
     """
+    # Get the current user from the token
+    current_user = get_current_user(token, db)
+    
+    print(f"Fetching portfolio for user: {current_user.username}")
     portfolio = db.exec(select(Portfolio).where(Portfolio.user_id == current_user.id)).first()
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found for this user")
-    return {"portfolio": portfolio}
+    
+    return portfolio
 
 # Update portfolio (new secured endpoint)
 @router.put('/secure/update_portfolio')

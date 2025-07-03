@@ -1,4 +1,4 @@
-from ..models import Profile, ProfileCreate, ProfileOut
+from ..models import Profile, ProfileCreate, ProfileOut, PersonalInfo
 from ..database import get_session
 from fastapi import APIRouter, Depends, HTTPException, Security
 from sqlmodel import Session, select
@@ -82,6 +82,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     access_token = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm="HS256")
     
     return {
+        "user_id": user.id,
+        "username": user.username,
         "access_token": access_token,
         "token_type": "bearer"
     }
@@ -99,3 +101,64 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 @router.get('/me', response_model=ProfileOut)
 async def read_users_me(current_user: Profile = Depends(get_current_user)):
     return current_user
+
+
+@router.post('/add_personal_details/')
+async def add_personal_details(
+    personal_details: PersonalInfo,
+    current_user: Profile = Depends(get_current_user), 
+    db: Session = Depends(get_session)
+):
+    """
+    Add or update personal details for the authenticated user.
+    """
+    try:
+        existing_info = db.exec(select(PersonalInfo).where(PersonalInfo.user_id == current_user.id)).first()
+        if existing_info:
+            # Update existing personal information
+            existing_info.location = personal_details.location
+            existing_info.occupation = personal_details.occupation
+            existing_info.dependants = personal_details.dependants
+            existing_info.marital_status = personal_details.marital_status
+            existing_info.income = personal_details.income
+        else:
+            # Create new personal information
+            new_info = PersonalInfo(
+                user_id=current_user.id,
+                location=personal_details.location,
+                occupation=personal_details.occupation,
+                dependants=personal_details.dependants,
+                marital_status=personal_details.marital_status,
+                income=personal_details.income
+            )
+            db.add(new_info)
+
+        
+        db.commit()
+        db.refresh(existing_info if existing_info else new_info)
+        
+        return {"message": "Personal details updated successfully!", "user": current_user}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e) + " An error occurred while updating personal details.")
+    
+@router.get('/personal_info/{user_id}')
+async def get_personal_info(user_id: int, db: Session = Depends(get_session)):
+    """
+    Get personal information for a user by user_id.
+    """
+    personal_info = db.exec(select(PersonalInfo).where(PersonalInfo.user_id == user_id)).first()
+    if not personal_info:
+        raise HTTPException(status_code=404, detail="Personal information not found for this user")
+    return {"personal_info": personal_info}
+@router.get('/me/personal_info')
+async def get_my_personal_info(
+    current_user: Profile = Depends(get_current_user), 
+    db: Session = Depends(get_session)
+):
+    """
+    Get personal information for the authenticated user.
+    """
+    personal_info = db.exec(select(PersonalInfo).where(PersonalInfo.user_id == current_user.id)).first()
+    if not personal_info:
+        raise HTTPException(status_code=404, detail="Personal information not found for this user")
+    return {"personal_info": personal_info} 

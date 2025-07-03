@@ -1,40 +1,58 @@
-import select
+import sys
+from pathlib import Path
+import logging
 import uuid
 from typing import Any, Dict, List, Optional
 import finnhub
+from datetime import datetime, timedelta
+
+# Langchain imports with correct paths
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 import langchain_core.output_parsers as output_parsers
 from langchain_core.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import create_react_agent
+from langchain.agents import AgentExecutor, create_react_agent  # Fixed import
 from langchain.tools import tool
+from FinAdvisor.api import models, database
+import os
+# Other imports
 from dotenv import load_dotenv
 from google import genai
 from fastapi import HTTPException
-import logging
-from FinAdvisor.api import models, database
 import yfinance as yf
-from datetime import datetime, timedelta
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-import torch
-from sqlalchemy import select
-# from sentiment import analyze_sentiment
-load_dotenv()
-import os
-google_api_key=os.getenv("GOOGLE_API_KEY")
+from sqlalchemy import select, desc
+
+# Add the project root to the Python path
+project_root = str(Path(__file__).parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Move these imports inside functions where they're needed
+# from FinAdvisor.api import models, database
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+
+# Environment variables
+google_api_key = os.getenv("GOOGLE_API_KEY")
+
+
+# Initialize clients
 try:
-    client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    client = genai.Client(api_key=google_api_key)
+    logging.info("Gemini client initialized successfully")
 except Exception as e:
     logging.error(f"Failed to initialize Gemini client: {e}")
     client = None
-llm= ChatGoogleGenerativeAI(
+
+llm = ChatGoogleGenerativeAI(
     model="gemini-1.5-flash",
     temperature=0.2,
     api_key=google_api_key
 )
-finnhub_api_key = os.getenv("FINHUB")
-finnhub_client = finnhub.Client(api_key=finnhub_api_key)
+
+
 # Company ticker mapping
 company_ticker_map = {
     "Reliance Industries": "RELIANCE",
@@ -75,7 +93,8 @@ def extract_company_ticker(prompt: str) -> str:
     Returns the NSE-compatible stock ticker symbol (e.g. RELIANCE.NS).
     """
     if not client:
-        raise HTTPException(status_code=500, detail="Gemini client not initialized")
+        logging.warning("Gemini client not available, using fallback method")
+        return _fallback_ticker_extraction(prompt)
 
     company_names = list(company_ticker_map.keys())
     company_names_str = ", ".join(company_names)
@@ -115,167 +134,331 @@ def extract_company_ticker(prompt: str) -> str:
         )
 
     except Exception as e:
-        logging.error(f"Error extracting company name: {e}")
-        raise HTTPException(status_code=500, detail="Failed to extract company name")
+        logging.error(f"Error extracting company name with Gemini: {e}")
+        return _fallback_ticker_extraction(prompt)
 
-
-
+def _fallback_ticker_extraction(prompt: str) -> str:
+    """Fallback method for ticker extraction when Gemini is not available."""
+    prompt_lower = prompt.lower()
+    
+    # Check for exact company name matches
+    for company, ticker in company_ticker_map.items():
+        if company.lower() in prompt_lower:
+            return f"{ticker}.NS"
+    
+    # Check for ticker matches
+    for ticker in company_ticker_map.values():
+        if ticker.lower() in prompt_lower:
+            return f"{ticker}.NS"
+    
+    # Default fallback
+    logging.warning("No company found in prompt, defaulting to RELIANCE")
+    return "RELIANCE.NS"
 
 @tool
 def query_stock_data(prompt: str) -> str:
     """
     Query stock data based on user prompt.
-    Extracts company name, generates SQL query, and returns results.
+    Extracts company name and returns stock information.
     """
+    # Import here to avoid circular imports
     
-    db= database.get_db()
-    if not db:
-        raise HTTPException(status_code=500, detail="Database connection not initialized")
-
+    
     try:
-        
         ticker = extract_company_ticker(prompt)
-
-        data = db.execute(select(models.StockData).where(models.StockData.stock_ticker == ticker)).fetchall()
-        if not data:
+        logging.info(f"Querying stock data for ticker: {ticker}")
+        
+        # Try to get data from database first
+        db = database.get_db()
+        if db:
             try:
-                stock = yf.Ticker(ticker)
-                history = stock.history(period="1d")
-                if history.empty:
-                    raise HTTPException(status_code=404, detail=f"No stock data found for ticker '{ticker}'")
+                data = db.execute(
+                    select(models.StockData).where(models.StockData.stock_ticker == ticker)
+                ).fetchall()
                 
-                # Convert to a list of dictionaries for consistency
-                sector = stock.info.get('sector', 'Unknown')
-                current_price = history['Close'].iloc[-1]
-                pe_ratio = stock.info.get('forwardPE', None)
-                pb_ratio = stock.info.get('priceToBook', None)
-                dividend_yield = stock.info.get('dividendYield', None)
-                eps = stock.info.get('trailingEps', None)
-                book_value = stock.info.get('bookValue', None)
-                market_cap = stock.info.get('marketCap', None)
-                volume = stock.info.get('volume', None)
-
-                data = {
-                    "stock_ticker": ticker,
-                    "sector": sector,
-                    "current_price": current_price,
-                    "pe_ratio": pe_ratio,
-                    "pb_ratio": pb_ratio,
-                    "dividend_yield": dividend_yield,
-                    "eps": eps,
-                    "book_value": book_value,
-                    "market_cap": market_cap,
-                    "volume": volume,
-                    "last_updated": history.index[-1].isoformat()
-                }
+                if data:
+                    return f"Stock data from database: {data[0]}"
             except Exception as e:
-                logging.error(f"Error fetching stock data from Yahoo Finance: {e}")
-                raise HTTPException(status_code=500, detail="Failed to fetch stock data")
-
-        return data
-    except HTTPException as e:
-        raise e
+                logging.error(f"Database query failed: {e}")
+        
+        # Fallback to Yahoo Finance
+        try:
+            stock = yf.Ticker(ticker)
+            history = stock.history(period="1d")
+            
+            if history.empty:
+                return f"No stock data found for ticker '{ticker}'"
+            
+            info = stock.info
+            current_price = history['Close'].iloc[-1]
+            
+            stock_info = {
+                "ticker": ticker,
+                "current_price": f"₹{current_price:.2f}",
+                "sector": info.get('sector', 'Unknown'),
+                "pe_ratio": info.get('forwardPE', 'N/A'),
+                "pb_ratio": info.get('priceToBook', 'N/A'),
+                "dividend_yield": info.get('dividendYield', 'N/A'),
+                "market_cap": info.get('marketCap', 'N/A'),
+                "volume": info.get('volume', 'N/A'),
+                "last_updated": datetime.now().isoformat()
+            }
+            
+            result = f"""
+Stock Information for {ticker}:
+- Current Price: {stock_info['current_price']}
+- Sector: {stock_info['sector']}
+- P/E Ratio: {stock_info['pe_ratio']}
+- P/B Ratio: {stock_info['pb_ratio']}
+- Dividend Yield: {stock_info['dividend_yield']}
+- Market Cap: {stock_info['market_cap']}
+- Volume: {stock_info['volume']}
+- Last Updated: {stock_info['last_updated']}
+            """
+            
+            return result.strip()
+            
+        except Exception as e:
+            logging.error(f"Error fetching stock data from Yahoo Finance: {e}")
+            return f"Failed to fetch stock data for {ticker}: {str(e)}"
+            
     except Exception as e:
         logging.error(f"Error in query_stock_data: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process stock data query")
-# Additional utility functions
+        return f"Failed to process stock data query: {str(e)}"
+
 @tool 
-def get_company_news(prompt: str):
+def get_company_news(prompt: str) -> str:
     """
-    Fetch news articles related to a specific company.
+    Fetch news articles and sentiment analysis for a specific company.
     """
-    ticker=extract_company_ticker(prompt)
-    today=datetime.now().date()
-    past=today - timedelta(days=30)
-    company_news = finnhub_client.company_news(ticker, _from=past, to=today)
-    
-    return company_news
-# @tool 
-# def get_sentiment(prompt: str):
-#     """
-#     Get sentiment analysis for a specific company based on user prompt.
-#     """
-#     ticker=extract_company_ticker(prompt)
-#     company_news = get_company_news(prompt)
-#     sentiments = []
-#     for article in company_news:
-#         sentiment = analyze_sentiment(article['title'])
-#         sentiments.append(sentiment)
-#     return sentiments
+    try:
+        logging.info(f"Getting news and sentiment for prompt: {prompt}")
+        news_sentiment = get_sentiment(prompt)
+        
+        if not news_sentiment:
+            return "No news articles found for the specified company."
+        
+        if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
+            if news_sentiment[0].get('error'):
+                return f"Error: {news_sentiment[0]['error']}"
+        
+        # Format the results for better readability
+        result = "News Sentiment Analysis:\n\n"
+        
+        positive_count = 0
+        negative_count = 0
+        
+        for i, item in enumerate(news_sentiment[:5], 1):  # Limit to top 5 articles
+            if 'sentiment' in item:
+                sentiment = item['sentiment']
+                title = item.get('title', 'No title')[:100] + "..."
+                
+                result += f"{i}. {title}\n"
+                result += f"   Sentiment: {sentiment['label']} (confidence: {sentiment['score']})\n\n"
+                
+                if sentiment['label'] == 'POSITIVE':
+                    positive_count += 1
+                else:
+                    negative_count += 1
+        
+        result += f"Summary: {positive_count} positive, {negative_count} negative articles analyzed."
+        
+        return result
+        
+    except Exception as e:
+        logging.error(f"Error in get_company_news: {e}")
+        return f"Failed to fetch company news: {str(e)}"
 
 @tool
-def get_company_list() -> list:
+def get_company_list() -> str:
     """Return list of available companies."""
-    return list(company_ticker_map.keys())
+    companies = list(company_ticker_map.keys())
+    return f"Available companies for analysis:\n" + "\n".join([f"- {company}" for company in companies])
+
 @tool
 def get_ticker_by_company(company_name: str) -> str:
     """Get ticker symbol by exact company name match."""
-    return company_ticker_map.get(company_name)
+    ticker = company_ticker_map.get(company_name)
+    if ticker:
+        return f"Ticker for {company_name}: {ticker}.NS"
+    else:
+        return f"Company '{company_name}' not found in our database."
+
 @tool
-def is_valid_ticker(ticker: str) -> bool:
+def is_valid_ticker(ticker: str) -> str:
     """Check if ticker is valid."""
-    return ticker in company_ticker_map.values()
-tools=[
+    # Remove .NS suffix for checking
+    base_ticker = ticker.replace('.NS', '')
+    is_valid = base_ticker in company_ticker_map.values()
+    return f"Ticker '{ticker}' is {'valid' if is_valid else 'invalid'}."
+
+# Define tools list
+tools = [
+    query_stock_data,
+    get_company_news,
     get_company_list,
     get_ticker_by_company,
     is_valid_ticker
 ]
-# agent=create_react_agent(
-#     llm=llm,
-#     tools=tools,
-#     prompt=prompt
-# )
 
-# Database schema context
-# schema_context = """Table: stock_data
-# Columns:
-# - stock_id (UUID, primary key)
-# - stock_name (TEXT)
-# - stock_ticker (TEXT, unique)
-# - sector (TEXT, optional)
-# - current_price (FLOAT)
-# - pe_ratio (FLOAT, optional)
-# - pb_ratio (FLOAT, optional)
-# - dividend_yield (FLOAT, optional)
-# - eps (FLOAT, optional)
-# - book_value (FLOAT, optional)
-# - market_cap (FLOAT, optional)
-# - volume (INTEGER, optional)
-# - last_updated (TIMESTAMP with timezone)"""
+# Create prompt template
+prompt_template = PromptTemplate(
+    input_variables=["input", "tools", "tool_names", "agent_scratchpad"],
+    template="""You are FinGuru, an intelligent financial assistant that helps users manage their investments through natural conversation.
 
-# def generate_sql_query(prompt: str, ticker: str) -> str:
-#     """Generate SQL query based on user prompt and ticker symbol."""
-#     if not client:
-#         raise HTTPException(status_code=500, detail="Gemini client not initialized")
+Your capabilities include:
+- Fetching the latest news articles for a specific company and analyzing sentiment
+- Providing comprehensive stock market data for Indian companies
+- Answering general questions about companies and stocks
+- Helping with investment decisions based on data analysis
+
+You have access to these tools:
+{tools}
+
+Tool names: {tool_names}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {input}
+Thought: {agent_scratchpad}"""
+)
+
+# Create agent
+agent = create_react_agent(
+    llm=llm,
+    tools=tools,
+    prompt=prompt_template
+)
+
+# Create agent executor
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    verbose=True,
     
-#     llm_prompt = f"""
-# User prompt: "{prompt}"
-# Ticker: {ticker}
+    handle_parsing_errors=True,
+    max_iterations=10
+)
 
-# Use the following table schema to write a valid SQL query.
-# {schema_context}
-
-# Important guidelines:
-# - Only return the SQL query, no explanations or markdown formatting
-# - Use the ticker symbol to filter results: WHERE stock_ticker = '{ticker}'
-# - Ensure proper SQL syntax
-# - Handle NULL values appropriately
-
-# SQL Query:
-# """
+def financial_advice(user_id: uuid.UUID, query: str, db=None) -> Dict[str, Any]:
+    """
+    Generate financial advice based on user profile and query.
+    """
+    # Import here to avoid circular imports
+    from FinAdvisor.api import models, database
     
-#     try:
-#         response = client.models.generate_content(
-#             model="gemini-2.0-flash",
-#             contents=llm_prompt
-#         )
+    try:
+        if not db:
+            db = database.get_db()
+
+        if not query:
+            raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+        if len(query) > 1000:
+            raise HTTPException(status_code=400, detail="Query is too long. Please limit to 1000 characters.")
+
+        # Get user history
+        try:
+            history = db.execute(
+                select(models.Chat)
+                .where(models.Chat.user_id == user_id)
+                .order_by(desc(models.Chat.timestamp))
+                .limit(5)
+            ).fetchall()
+            
+            history_str = "\n".join([
+                f"User: {chat.human_message} AI: {chat.ai_message}" 
+                for chat in history
+            ]) if history else "No previous conversation history."
+            
+        except Exception as e:
+            logging.error(f"Error fetching chat history: {e}")
+            history_str = "Unable to fetch conversation history."
         
-#         # Clean the response
-#         sql_query = response.text.strip()
-#         sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
+        # Get user profile
+        try:
+            user_info = db.execute(
+                select(models.Profile).where(models.Profile.id == user_id)
+            ).first()
+            
+            portfolio = db.execute(
+                select(models.Portfolio).where(models.Portfolio.user_id == user_id)
+            ).first()
+            
+        except Exception as e:
+            logging.error(f"Error fetching user data: {e}")
+            user_info = None
+            portfolio = None
         
-#         return sql_query
+        if not user_info:
+            logging.warning(f"User {user_id} not found in database")
+            user_context = "New user - no profile information available."
+        else:
+            user_context = f"User information: {user_info}"
+            if portfolio:
+                user_context += f"\nPortfolio information: {portfolio}"
         
-#     except Exception as e:
-#         logging.error(f"Error generating SQL query: {e}")
-#         raise HTTPException(status_code=500, detail="Failed to generate SQL query")
+        # Construct enhanced query with context
+        enhanced_query = f"""
+Context: {history_str}
+
+{user_context}
+
+This is a financial advisory session. Please provide comprehensive analysis and advice based on the user's question and available data.
+
+User Question: {query}
+        """
+        
+        # Execute agent
+        response = agent_executor.invoke({"input": enhanced_query})
+        
+        if not response or 'output' not in response:
+            raise HTTPException(status_code=500, detail="Failed to get a response from the financial advisor.")
+        
+        return {
+            "response": response['output'],
+            "user_id": str(user_id),
+            "query": query
+        }
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logging.error(f"Error generating financial advice: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate financial advice: {str(e)}")
+
+# Test function
+def test_financial_advice():
+    """Test function for the financial advice system."""
+    test_queries = [
+        "What is the current price of Reliance Industries?",
+        "Show me news sentiment for TCS",
+        "Which companies are available for analysis?"
+    ]
+    
+    test_user_id = uuid.uuid4()
+    
+    for query in test_queries:
+        print(f"\n{'='*60}")
+        print(f"Testing query: {query}")
+        print('='*60)
+        
+        try:
+            result = financial_advice(test_user_id, query)
+            print(f"Response: {result['response']}")
+        except Exception as e:
+            print(f"Error: {e}")
+
+if __name__ == "__main__":
+    test_financial_advice()

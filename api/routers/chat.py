@@ -5,15 +5,21 @@ from sqlmodel import Session, select
 from starlette.requests import Request
 import uuid
 import yfinance as yf
-from ..utils import chat_with_gemini, get_ticker_by_company, generate_sql_query, get_company_list, extract_company_ticker
+from ..utils import chat_with_gemini
 from dotenv import load_dotenv
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import os
 import finnhub
 from ..bertmodel_loader import tokenizer, model
 from ..OAuth2 import get_current_user, authenticate_user, verify_password
 from fastapi.security import OAuth2PasswordBearer
+import sys
+from pathlib import Path
+parent_dir = str(Path(__file__).parent.parent.parent.parent)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
+from FinAdvisor.agent.finagent import financial_advice
 # Create OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="user/token")
 
@@ -31,7 +37,7 @@ def fetch_news(ticker:str)->str:
     news = finnhub_client.company_news(ticker, _from=date_past, to=date_today)
     return news
 
-def financial_advice(user_id: uuid.UUID, prompt: str, db: Session = Depends(get_session)):
+def gemini_financial_advice(user_id: uuid.UUID, prompt: str, db: Session = Depends(get_session)):
     try:
         if not prompt:
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
@@ -56,7 +62,7 @@ def financial_advice(user_id: uuid.UUID, prompt: str, db: Session = Depends(get_
         if not user_info:
             raise HTTPException(status_code=404, detail="User not found")
         context = f"""Context: {history}
-You are a financial advisor. Answer the question based on the context provided and the user data.
+You are a financial advisor FinSaathi. Answer the question based on the context provided and the user data.
 
 User Data:
 - User: {username}
@@ -103,53 +109,29 @@ async def get_secure_financial_advice(
         raise HTTPException(status_code=400, detail="Prompt is required")
     
     # Get advice using the financial_advice function
-    response = financial_advice(current_user.id, prompt, db)
-    
+    response1=financial_advice(current_user.id, prompt, db)
+    if not response1:
+        raise HTTPException(status_code=500, detail="Failed to get financial advice from FinGuru.")
+        
+    response2 = gemini_financial_advice(current_user.id, prompt, db)
+    if not response2:
+        raise HTTPException(status_code=500, detail="Failed to get financial advice from FinSaathi.")
+    response=f"FinGuru: {response1['response']} \n FinSaathi: {response2['response']}"
+
     # Save the chat to database
     new_chat = Chat(
         user_id=current_user.id,
         human_message=prompt,
-        ai_message=response["response"]
+        ai_message=response,
+          # Use current time for timestamp
     )
     
     db.add(new_chat)
     db.commit()
     db.refresh(new_chat)
     
-    return response
-
-# Update company_query to use authentication if needed
-def company_query(user_id: uuid.UUID, request: Request, db: Session = Depends(get_session)):
-   try:
-       prompt = request.query_params.get("prompt")
-       if not prompt:
-           raise HTTPException(status_code=400, detail="Prompt cannot be empty")
-       if len(prompt) > 1000:
-             raise HTTPException(status_code=400, detail="Prompt is too long. Please limit to 1000 characters.")
-       ticker=extract_company_ticker(prompt=prompt)
-       sql_query=generate_sql_query(prompt=prompt, ticker=ticker)
-       if not sql_query:
-           raise HTTPException(status_code=500, detail="Failed to generate SQL query.")
-       data = db.exec(sql_query).first()
-       context= f"This is the information about the company from the database about which the user might have asked read the question {prompt} and use the data: {data} as context"
-       response=chat_with_gemini(context)
-       return response
-   except Exception as e:
-       raise HTTPException(status_code=500, detail="Sorry not enough information")
-
-@router.post("/company-query")
-async def get_secure_company_info(
-    request: Request,
-    current_user: Profile = Depends(lambda token: get_current_user(token, Depends(get_session))),
-    db: Session = Depends(get_session)
-):
-    """
-    Get company information as an authenticated user
-    """
-    return company_query(current_user.id, request, db)
-
-
-
+    # Your secure-advice endpoint should return a response like this:
+    return {"response": response}
 
 
 

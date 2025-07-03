@@ -1,16 +1,17 @@
 # models.py
-from sqlmodel import SQLModel, Field
-from sqlalchemy import Column, TIMESTAMP, String
-from sqlalchemy.sql import func
+from sqlmodel import Field, SQLModel, Relationship, Session, create_engine
+from typing import Optional, List, Union
 from datetime import datetime
-from typing import Optional, Union
-from pydantic import validator, BaseModel
-from pydantic.networks import EmailStr
 import uuid
+from sqlalchemy import Column, String, TIMESTAMP, func
+from pydantic import EmailStr, validator, BaseModel
 
+# Create a single metadata instance
+metadata = SQLModel.metadata
 
 class Profile(SQLModel, table=True):
     __tablename__ = "user"
+    __table_args__ = {"extend_existing": True}
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     username: str = Field(sa_column=Column(String, unique=True, nullable=False))
@@ -18,6 +19,33 @@ class Profile(SQLModel, table=True):
     password_hash: str = Field(nullable=False)
     name: str = Field(nullable=False)
     age: Optional[int] = Field(default=None, nullable=True)
+
+    created_at: datetime = Field(
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            server_default=func.now()
+        )
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now()
+        )
+    )
+class PersonalInfo(SQLModel, table=True):
+    __tablename__ = "personal_info"
+    __table_args__ = {"extend_existing": True}  # Add this line
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="user.id", index=True)
+    location: Optional[str] = Field(default="Ind", nullable=True)
+    occupation: Optional[str] = Field(default=None, nullable=True)
+    dependants: Optional[int] = Field(default=0, nullable=True)
+    marital_status: Optional[str] = Field(default=None, nullable=True)
+    income: Optional[float] = Field(default=None, nullable=True)
+    
 
     created_at: datetime = Field(
         sa_column=Column(
@@ -90,6 +118,7 @@ class ProfileOut(BaseModel):
 
 class Chat(SQLModel, table=True):
     __tablename__ = "chat"
+    __table_args__ = {"extend_existing": True}  # Add this line
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="user.id", index=True)
@@ -105,7 +134,8 @@ class Chat(SQLModel, table=True):
 
 class UserLogin(SQLModel, table=True):
     __tablename__ = "user_login"
-
+    __table_args__ = {"extend_existing": True}  # Add this line
+    
     id: Optional[int] = Field(default=None, primary_key=True)
     user_name: str = Field(index=True)
     password: str = Field(index=True)
@@ -119,7 +149,8 @@ class UserLogin(SQLModel, table=True):
 
 class Portfolio(SQLModel, table=True):
     __tablename__ = "portfolio"
-
+    __table_args__ = {"extend_existing": True}  # Add this line
+    
     portfolio_id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="user.id", index=True)
     equity_amt: Optional[float] = Field(default=None, index=True)
@@ -148,7 +179,8 @@ class Portfolio(SQLModel, table=True):
 
 class StockData(SQLModel, table=True):
     __tablename__ = "stock_data"
-
+    __table_args__ = {"extend_existing": True}  # Add this line
+    
     stock_id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     stock_name: str = Field(index=True)
     stock_ticker: str = Field(sa_column=Column(String, unique=True, nullable=False))
